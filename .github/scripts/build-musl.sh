@@ -5,7 +5,7 @@
 # host can publish partial results and report afterwards.
 set -e
 xbps-install -Syu xbps 2>&1 | tail -n 2
-xbps-install -y base-devel xtools bash git perl tar xz python3 github-cli shadow ccache 2>&1 | tail -n 2
+xbps-install -y base-devel xtools bash git perl tar xz python3 github-cli shadow ccache util-linux 2>&1 | tail -n 2
 useradd -m builder 2>/dev/null || true
 chown -R builder:builder /void-packages
 mkdir -p /void-packages/logs
