@@ -156,6 +156,12 @@ jobs:
             rm -f *.sig2 *.sig *-repodata*
           fi
 
+      - name: Allow unprivileged userns (Ubuntu 24.04 fix)
+        run: |
+          echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "no apparmor file"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+
       - name: Build packages (void-musl docker)
         id: build
         if: inputs.sync_only != 'true'
@@ -168,10 +174,12 @@ jobs:
             -v "$PWD/.github/scripts/build-musl.sh:/build-musl.sh:ro" \
             -e PKGS="$PKGS" \
             "$MUSL_IMAGE" /bin/sh /build-musl.sh
-          [ -f z-packages/failed.txt ] && cat z-packages/failed.txt || true
+          failed="$(cat z-packages/failed.txt 2>/dev/null || true)"
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          [ -z "$failed" ] || echo "FAILED packages:$failed"
 
       - name: Upload per-package logs (debug)
-        if: failure()
+        if: steps.build.outputs.failed != ''
         uses: actions/upload-artifact@v4
         with:
           name: musl-build-logs
