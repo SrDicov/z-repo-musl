@@ -8,6 +8,12 @@ xbps-install -Syu xbps 2>&1 | tail -n 2
 xbps-install -y base-devel xtools bash git perl tar xz python3 github-cli shadow ccache 2>&1 | tail -n 2
 useradd -m builder 2>/dev/null || true
 chown -R builder:builder /void-packages
+mkdir -p /void-packages/logs
+echo "=== diagnostics ==="
+id
+ls -l /bin/bash /bin/sh
+chroot --userspec=builder:builder / /bin/bash -c "id; cd /void-packages && ./xbps-src -V"
+echo "=== end diagnostics ==="
 chroot --userspec=builder:builder / /bin/bash -c \
   "cd /void-packages && common/travis/set_mirror.sh 2>/dev/null || true"
 chroot --userspec=builder:builder / /bin/bash -c \
@@ -22,9 +28,10 @@ for pkg in $PKGS; do
     echo "FAIL $pkg (no such template)"; failed="$failed $pkg"; continue
   fi
   echo "=== Building $pkg (x86_64-musl) ==="
-  # pipefail inside bash -c: | tail must not mask xbps-src failures
+  # pipefail inside bash -c: | tail must not mask xbps-src failures.
+  # Full per-package log goes to logs/ (mounted, survives as artifact).
   chroot --userspec=builder:builder / /bin/bash -c \
-    "set -o pipefail; cd /void-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 60" \
+    "set -o pipefail; cd /void-packages && ./xbps-src pkg $pkg 2>&1 | tee /void-packages/logs/$pkg.log | tail -n 60" \
     || { echo "FAIL $pkg"; failed="$failed $pkg"; }
 done
 # native builds land in hostdir/binpkgs/ top level: move to x86_64-musl/
