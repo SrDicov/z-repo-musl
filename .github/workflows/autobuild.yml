@@ -1,5 +1,9 @@
 name: Z Repo Autobuild (musl)
 
+# NOTE: no `container:` here on purpose. The void-musl image is musl-linked
+# and cannot run GitHub's glibc-linked action runtimes (node) nor has bash.
+# We run on Ubuntu and use docker manually for the build only (repo-neko
+# pattern); gh/publish orchestration stays on the host.
 on:
   push:
     branches: [master, main]
@@ -40,7 +44,8 @@ on:
 env:
   ARCH: x86_64-musl
   REPO_TAG: stable
-  GH_REPO: ${{ github.repository }} # gh inside z-packages/ clone must target this repo
+  GH_REPO: ${{ github.repository }} # gh must target this repo, not clones
+  MUSL_IMAGE: ghcr.io/void-linux/void-musl:latest
 
 concurrency:
   group: z-repo-musl-autobuild
@@ -106,36 +111,11 @@ jobs:
     if: needs.check.outputs.pkgs != '' || inputs.sync_only == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    container:
-      image: ghcr.io/void-linux/void-musl-full
-      options: --privileged
-      volumes:
-        - /dev:/dev
-      env:
-        ARCH: x86_64-musl
-        BOOTSTRAP: x86_64-musl
     steps:
-      - name: Checkout z-repo
+      - name: Checkout z-repo-musl
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      - name: Prepare container (no full upgrade)
-        run: |
-          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
-          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
-          xbps-install -Syu xbps 2>&1 | tail -n 3 || true
-          xbps-install -y sudo bash curl git perl tar xz github-cli python3 xbps-triggers 2>&1 | tail -n 3
-          useradd -G xbuilder -M builder 2>/dev/null || true
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          git config --global --add safe.directory '*'
-          git config --system --add safe.directory '*'
-
-      - name: Allow unprivileged userns (Ubuntu 24.04 fix)
-        run: |
-          echo 0 | tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "no apparmor file"
-          sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
-          sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
 
       - name: Clone z-packages (treeless)
         run: |
@@ -153,16 +133,13 @@ jobs:
           key: musl-xbps-v1
           restore-keys: musl-xbps-
 
-      - name: Configure z-packages
+      - name: Configure z-packages (host side)
         run: |
-          chown -R builder:builder . z-packages
-          sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64-musl \
+          mkdir -p z-packages/hostdir/binpkgs/x86_64-musl \
             z-packages/hostdir/sources z-packages/hostdir/ccache
-          sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
-          sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
-          sudo -Eu builder bash -c 'cd z-packages && printf "%s\n" \
-            XBPS_PRESERVE_PKGS=yes XBPS_CCACHE=yes \
-            "XBPS_MAKEJOBS=$(nproc)" XBPS_ALLOW_RESTRICTED=yes >> etc/conf'
+          printf '%s\n' XBPS_PRESERVE_PKGS=yes XBPS_CCACHE=yes \
+            "XBPS_MAKEJOBS=$(nproc)" XBPS_ALLOW_RESTRICTED=yes \
+            >> z-packages/etc/conf
 
       - name: Seed binpkgs from release
         env:
@@ -172,9 +149,6 @@ jobs:
           cd z-packages/hostdir/binpkgs/x86_64-musl
           if gh release view "$REPO_TAG" >/dev/null 2>&1; then
             gh release download "$REPO_TAG" --pattern '*.xbps*' || true
-          elif [ -d "$GITHUB_WORKSPACE/x86_64-musl" ]; then
-            # one-time migration: seed from git-committed binpkgs
-            cp -v "$GITHUB_WORKSPACE"/x86_64-musl/*.xbps . 2>/dev/null || true
           fi
           ls *.xbps 2>/dev/null | wc -l
           if [ "${{ inputs.resign }}" = "true" ]; then
@@ -182,52 +156,32 @@ jobs:
             rm -f *.sig2 *.sig *-repodata*
           fi
 
-      - name: Bootstrap x86_64-musl
-        run: |
-          sudo -Eu builder bash -c 'cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20'
-
-      - name: Build packages
+      - name: Build packages (void-musl docker)
         id: build
         if: inputs.sync_only != 'true'
-        shell: bash
+        env:
+          PKGS: ${{ needs.check.outputs.pkgs }}
         run: |
           set -e
-          set -o pipefail
-          PKGS="${{ needs.check.outputs.pkgs }}"
-          echo "Packages to build: $PKGS"
-          failed=""
-          for pkg in $PKGS; do
-            # symlinked subpackage dirs are built via their parent: skip
-            if [ -L "z-packages/srcpkgs/$pkg" ]; then
-              echo "=== Skipping $pkg (symlink, built with parent) ==="
-              continue
-            fi
-            if [ ! -d "z-packages/srcpkgs/$pkg" ]; then
-              echo "FAIL $pkg (no such template)"; failed="$failed $pkg"; continue
-            fi
-            echo "=== Building $pkg (x86_64-musl) ==="
-            # pipefail inside bash -c: | tail must not mask xbps-src failures
-            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 60" \
-              || { echo "FAIL $pkg"; failed="$failed $pkg"; }
-          done
-          [ -z "$failed" ] || echo "failed=$failed" >> "$GITHUB_OUTPUT"
-          if [ -n "$failed" ]; then
-            echo "FAILED packages:$failed (publishing partial results anyway)"
-          fi
-          # never exit 1 here: publish runs on always() and reports after
-          # native builds land in hostdir/binpkgs/ top level: move to x86_64-musl/
-          if ls z-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
-            mv z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
-            mv z-packages/hostdir/binpkgs/*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
-          fi
+          docker run --rm --privileged \
+            -v "$PWD/z-packages:/void-packages" \
+            -v "$PWD/.github/scripts/build-musl.sh:/build-musl.sh:ro" \
+            -e PKGS="$PKGS" \
+            "$MUSL_IMAGE" /bin/sh /build-musl.sh
+          [ -f z-packages/failed.txt ] && cat z-packages/failed.txt || true
 
       - name: Publish to release (always, even on build failure)
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
-        shell: bash
         run: |
-          bash .github/scripts/publish.sh z-packages/hostdir/binpkgs/x86_64-musl
-          failed="${{ steps.build.outputs.failed }}"
+          docker run --rm --privileged \
+            -v "$PWD/z-packages:/void-packages" \
+            -v "$PWD/.github/scripts/publish.sh:/publish.sh:ro" \
+            -e ARCH="$ARCH" -e REPO_TAG="$REPO_TAG" -e GH_REPO="$GH_REPO" \
+            -e GH_TOKEN="$GH_TOKEN" -e XBPS_PRIVATE_KEY="$XBPS_PRIVATE_KEY" \
+            "$MUSL_IMAGE" /bin/sh -c \
+            "xbps-install -Sy github-cli python3 2>&1 | tail -n 1; bash /publish.sh /void-packages/hostdir/binpkgs/x86_64-musl"
+          failed="$(cat z-packages/failed.txt 2>/dev/null || true)"
           [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
