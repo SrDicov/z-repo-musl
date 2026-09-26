@@ -175,6 +175,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
+          RESIGN: ${{ inputs.resign }}
         run: |
           docker run --rm --privileged \
             -v "$PWD/z-packages:/void-packages" \
@@ -182,6 +183,6 @@ jobs:
             -e ARCH="$ARCH" -e REPO_TAG="$REPO_TAG" -e GH_REPO="$GH_REPO" \
             -e GH_TOKEN="$GH_TOKEN" -e XBPS_PRIVATE_KEY="$XBPS_PRIVATE_KEY" \
             "$MUSL_IMAGE" /bin/sh -c \
-            "xbps-install -Sy github-cli python3 2>&1 | tail -n 1; bash /publish.sh /void-packages/hostdir/binpkgs/x86_64-musl"
+            "xbps-install -Sy bash github-cli python3 2>&1 | tail -n 1; bash /publish.sh /void-packages/hostdir/binpkgs/x86_64-musl"
           failed="$(cat z-packages/failed.txt 2>/dev/null || true)"
           [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }

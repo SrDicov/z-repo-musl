@@ -58,13 +58,15 @@ for a in $(gh release view "$REPO_TAG" --json assets --jq '.assets[].name'); do
     *.xbps*) [ -e "$a" ] || gh release delete-asset "$REPO_TAG" "$a" -y ;;
   esac
 done
-# upload new/changed assets only (same name+size = already there)
+# upload new/changed assets (same name+size = already there).
+# NOTE: RSA sigs are fixed-size, so after a key rotation same-size sigs
+# would look current: RESIGN=true forces upload of everything.
 for f in "$repodata" *.xbps*; do
   [ -e "$f" ] || continue
   n=$(basename "$f"); s=$(stat -c%s "$f")
   rs=$(gh release view "$REPO_TAG" --json assets \
     --jq ".assets[] | select(.name==\"$n\") | .size" 2>/dev/null || true)
-  if [ "$rs" = "$s" ]; then
+  if [ "${RESIGN:-false}" != "true" ] && [ "$rs" = "$s" ]; then
     echo "up to date: $n"
   else
     gh release upload "$REPO_TAG" --clobber "$f"
