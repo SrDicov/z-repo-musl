@@ -202,3 +202,12 @@ jobs:
             "xbps-install -Sy bash github-cli python3 2>&1 | tail -n 1; bash /publish.sh /void-packages/hostdir/binpkgs/x86_64-musl"
           failed="$(cat z-packages/failed.txt 2>/dev/null || true)"
           [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
+
+      - name: Save xbps caches (always, even on failure)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            z-packages/hostdir/sources
+            z-packages/hostdir/ccache
+          key: musl-xbps-v1-${{ github.run_id }}
