@@ -20,6 +20,12 @@ on:
         default: 'false'
         type: choice
         options: ['false', 'true']
+      resign:
+        description: 'Wipe old signatures and sign everything from scratch (key rotation)'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
       force:
         description: 'Rebuild all packages even if current'
         required: false
@@ -171,6 +177,10 @@ jobs:
             cp -v "$GITHUB_WORKSPACE"/x86_64-musl/*.xbps . 2>/dev/null || true
           fi
           ls *.xbps 2>/dev/null | wc -l
+          if [ "${{ inputs.resign }}" = "true" ]; then
+            echo "resign requested: wiping old signatures and repodata"
+            rm -f *.sig2 *.sig *-repodata*
+          fi
 
       - name: Bootstrap x86_64-musl
         run: |
