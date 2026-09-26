@@ -1,0 +1,223 @@
+name: Z Repo Autobuild (musl)
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - '.github/**'
+      - 'keys/**'
+      - 'README.md'
+      - 'AGENTS.md'
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Build only these (comma/space separated, empty = auto-detect)'
+        required: false
+        default: ''
+      sync_only:
+        description: 'Skip build, only resign repodata and re-publish'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      force:
+        description: 'Rebuild all packages even if current'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+  schedule:
+    - cron: '0 3 * * *' # daily: poll z-packages
+  repository_dispatch:
+    types: [z-packages-update]
+
+env:
+  ARCH: x86_64-musl
+  REPO_TAG: stable
+  GH_REPO: ${{ github.repository }} # gh inside z-packages/ clone must target this repo
+
+concurrency:
+  group: z-repo-musl-autobuild
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    name: Detect outdated packages
+    runs-on: ubuntu-latest
+    outputs:
+      pkgs: ${{ steps.detect.outputs.pkgs }}
+    steps:
+      - name: Checkout workflow scripts
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: List release assets (no download)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          gh release view "$REPO_TAG" --json assets \
+            --jq '.assets[].name' > assets.txt 2>/dev/null \
+            || : > assets.txt
+          wc -l assets.txt
+
+      - name: Clone z-packages (treeless)
+        run: |
+          git clone --filter=tree:0 --depth 1 \
+            https://github.com/SrDicov/z-packages.git z-packages
+
+      - name: Detect outdated
+        id: detect
+        run: |
+          set -e
+          out=$(python3 .github/scripts/check_outdated.py \
+            z-packages/srcpkgs assets.txt --arch="$ARCH")
+          echo "$out"
+          auto=$(echo "$out" | sed -n 's/^pkgs://p')
+          if [ "${{ inputs.sync_only }}" = "true" ]; then
+            pkgs=""
+          elif [ -n "${{ inputs.packages }}" ]; then
+            pkgs=$(echo "${{ inputs.packages }}" | tr ',' ' ')
+          elif [ "${{ inputs.force }}" = "true" ]; then
+            pkgs=$(cd z-packages/srcpkgs && for d in */; do
+              d=${d%/}; [ -L "$d" ] || printf '%s ' "$d"
+            done)
+          else
+            pkgs="$auto"
+          fi
+          echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
+          [ -n "$pkgs" ] || echo "All binpkgs current, build will skip."
+
+  build:
+    name: Build and publish (musl)
+    needs: check
+    if: needs.check.outputs.pkgs != '' || inputs.sync_only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    container:
+      image: ghcr.io/void-linux/void-musl-full
+      options: --privileged
+      volumes:
+        - /dev:/dev
+      env:
+        ARCH: x86_64-musl
+        BOOTSTRAP: x86_64-musl
+    steps:
+      - name: Checkout z-repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Prepare container (no full upgrade)
+        run: |
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
+          xbps-install -Syu xbps 2>&1 | tail -n 3 || true
+          xbps-install -y sudo bash curl git perl tar xz github-cli python3 xbps-triggers 2>&1 | tail -n 3
+          useradd -G xbuilder -M builder 2>/dev/null || true
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          git config --global --add safe.directory '*'
+          git config --system --add safe.directory '*'
+
+      - name: Allow unprivileged userns (Ubuntu 24.04 fix)
+        run: |
+          echo 0 | tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo "no apparmor file"
+          sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+
+      - name: Clone z-packages (treeless)
+        run: |
+          rm -rf z-packages
+          git clone --filter=tree:0 --depth 1 \
+            https://github.com/SrDicov/z-packages.git z-packages
+          echo "commit: $(git -C z-packages rev-parse --short HEAD)"
+
+      - name: Restore xbps caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            z-packages/hostdir/sources
+            z-packages/hostdir/ccache
+          key: musl-xbps-v1
+          restore-keys: musl-xbps-
+
+      - name: Configure z-packages
+        run: |
+          chown -R builder:builder . z-packages
+          sudo -Eu builder mkdir -p z-packages/hostdir/binpkgs/x86_64-musl \
+            z-packages/hostdir/sources z-packages/hostdir/ccache
+          sudo -Eu builder bash -c 'cd z-packages && common/travis/set_mirror.sh 2>/dev/null || true'
+          sudo -Eu builder bash -c 'cd z-packages && common/travis/fetch-xtools.sh 2>/dev/null || true'
+          sudo -Eu builder bash -c 'cd z-packages && printf "%s\n" \
+            XBPS_PRESERVE_PKGS=yes XBPS_CCACHE=yes \
+            "XBPS_MAKEJOBS=$(nproc)" XBPS_ALLOW_RESTRICTED=yes >> etc/conf'
+
+      - name: Seed binpkgs from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          cd z-packages/hostdir/binpkgs/x86_64-musl
+          if gh release view "$REPO_TAG" >/dev/null 2>&1; then
+            gh release download "$REPO_TAG" --pattern '*.xbps*' || true
+          elif [ -d "$GITHUB_WORKSPACE/x86_64-musl" ]; then
+            # one-time migration: seed from git-committed binpkgs
+            cp -v "$GITHUB_WORKSPACE"/x86_64-musl/*.xbps . 2>/dev/null || true
+          fi
+          ls *.xbps 2>/dev/null | wc -l
+
+      - name: Bootstrap x86_64-musl
+        run: |
+          sudo -Eu builder bash -c 'cd z-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20'
+
+      - name: Build packages
+        id: build
+        if: inputs.sync_only != 'true'
+        shell: bash
+        run: |
+          set -e
+          set -o pipefail
+          PKGS="${{ needs.check.outputs.pkgs }}"
+          echo "Packages to build: $PKGS"
+          failed=""
+          for pkg in $PKGS; do
+            # symlinked subpackage dirs are built via their parent: skip
+            if [ -L "z-packages/srcpkgs/$pkg" ]; then
+              echo "=== Skipping $pkg (symlink, built with parent) ==="
+              continue
+            fi
+            if [ ! -d "z-packages/srcpkgs/$pkg" ]; then
+              echo "FAIL $pkg (no such template)"; failed="$failed $pkg"; continue
+            fi
+            echo "=== Building $pkg (x86_64-musl) ==="
+            # pipefail inside bash -c: | tail must not mask xbps-src failures
+            sudo -Eu builder bash -c "set -o pipefail; cd z-packages && ./xbps-src pkg $pkg 2>&1 | tail -n 60" \
+              || { echo "FAIL $pkg"; failed="$failed $pkg"; }
+          done
+          [ -z "$failed" ] || echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          if [ -n "$failed" ]; then
+            echo "FAILED packages:$failed (publishing partial results anyway)"
+          fi
+          # never exit 1 here: publish runs on always() and reports after
+          # native builds land in hostdir/binpkgs/ top level: move to x86_64-musl/
+          if ls z-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
+            mv z-packages/hostdir/binpkgs/*.xbps z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
+            mv z-packages/hostdir/binpkgs/*.xbps.sig2 z-packages/hostdir/binpkgs/x86_64-musl/ 2>/dev/null || true
+          fi
+
+      - name: Publish to release (always, even on build failure)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          bash .github/scripts/publish.sh z-packages/hostdir/binpkgs/x86_64-musl
+          failed="${{ steps.build.outputs.failed }}"
+          [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }

@@ -1,0 +1,10 @@
+# binpkgs are published as release assets (tag: stable), never committed
+*.xbps
+*.xbps.sig2
+*.sig2
+*.sig
+*-repodata
+# local xbps-src state if ever built here
+z-packages/
+hostdir/
+*.tar.gz
