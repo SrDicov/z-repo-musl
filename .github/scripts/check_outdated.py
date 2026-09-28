@@ -82,10 +82,15 @@ def load_pool(path):
 
 def collect_need(srcpkgs, arch, pool, release_lists):
     """Templates in srcpkgs missing their main binpkg from pool."""
+    # Infra that xbps-src hard-requires in-tree (XBPS_TRIGGERSDIR) but
+    # official void repos already ship: never build/publish it ourselves.
+    SKIP_BUILD = {"xbps-triggers"}
     need = []
     for entry in sorted(os.listdir(srcpkgs)):
         tpldir = os.path.join(srcpkgs, entry)
         if not os.path.isdir(tpldir) or os.path.islink(tpldir):
+            continue
+        if entry in SKIP_BUILD:
             continue
         tpl = os.path.join(tpldir, "template")
         if not os.path.isfile(tpl):

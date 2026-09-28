@@ -97,7 +97,7 @@ jobs:
             pkgs=$(echo "${{ inputs.packages }}" | tr ',' ' ')
           elif [ "${{ inputs.force }}" = "true" ]; then
             pkgs=$(cd z-packages/srcpkgs && for d in */; do
-              d=${d%/}; [ -L "$d" ] || printf '%s ' "$d"
+              d=${d%/}; [ -L "$d" ] || [ "$d" = "xbps-triggers" ] || printf '%s ' "$d"
             done)
           else
             pkgs="$auto"
