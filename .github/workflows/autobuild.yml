@@ -83,6 +83,17 @@ jobs:
           git clone --filter=tree:0 --depth 1 \
             https://github.com/SrDicov/z-packages.git z-packages
 
+      - name: Lint templates (fail fast)
+        run: |
+          # Catches dep-name, autodetect, hostdep, distfile and checksum
+          # mistakes before a 30-40 min build wastes the runner.
+          # Advisory only: the dep-name rules need the void-packages tree,
+          # which this job does not have.
+          set -e
+          git -C z-packages sparse-checkout set srcpkgs common 2>/dev/null || true
+          python3 z-packages/common/scripts/lint-templates z-packages/srcpkgs \
+            || echo "::warning::lint-templates findings above (advisory)"
+
       - name: Detect outdated
         id: detect
         run: |
