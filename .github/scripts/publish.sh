@@ -29,7 +29,10 @@ for f in os.listdir("."):
     if m:
         pkgs[m.group(1)].append((m.group(2), m.group(3), f))
 def vkey(v):
-    return tuple(int(p) if p.isdigit() else p for p in re.split(r"[.]", v))
+    # trocea digitos y letras por separado: comparable siempre y con el
+    # orden correcto (1.23.4b < 1.23.5; antes daba TypeError o al reves)
+    return tuple((0, int(p)) if p.isdigit() else (1, p)
+                 for p in re.findall(r"\d+|[A-Za-z]+", v))
 for name, vers in pkgs.items():
     # revision numerica: "10" < "9" como texto y el prune borraria el nuevo
     vers.sort(key=lambda t: (vkey(t[0]), int(t[1])))
