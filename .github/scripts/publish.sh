@@ -31,7 +31,8 @@ for f in os.listdir("."):
 def vkey(v):
     return tuple(int(p) if p.isdigit() else p for p in re.split(r"[.]", v))
 for name, vers in pkgs.items():
-    vers.sort(key=lambda t: (vkey(t[0]), t[1]))
+    # revision numerica: "10" < "9" como texto y el prune borraria el nuevo
+    vers.sort(key=lambda t: (vkey(t[0]), int(t[1])))
     for _, _, f in vers[:-1]:
         for ext in ("", ".sig2", ".sig"):
             try:
