@@ -211,7 +211,7 @@ jobs:
             -e ARCH="$ARCH" -e REPO_TAG="$REPO_TAG" -e GH_REPO="$GH_REPO" \
             -e GH_TOKEN="$GH_TOKEN" -e XBPS_PRIVATE_KEY="$XBPS_PRIVATE_KEY" \
             "$MUSL_IMAGE" /bin/sh -c \
-            "xbps-install -Sy bash github-cli python3 openssh openssl 2>&1 | tail -n 1; bash /publish.sh /void-packages/hostdir/binpkgs/x86_64-musl"
+            "xbps-install -Sy bash github-cli python3 openssh openssl bsdtar 2>&1 | tail -n 1; bash /publish.sh /void-packages/hostdir/binpkgs/x86_64-musl"
           failed="$(cat z-packages/failed.txt 2>/dev/null || true)"
           [ -z "$failed" ] || { echo "FAILED packages:$failed"; exit 1; }
 
