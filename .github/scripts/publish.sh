@@ -66,7 +66,10 @@ for f in "$repodata" *.xbps*; do
   n=$(basename "$f"); s=$(stat -c%s "$f")
   rs=$(gh release view "$REPO_TAG" --json assets \
     --jq ".assets[] | select(.name==\"$n\") | .size" 2>/dev/null || true)
-  if [ "${RESIGN:-false}" != "true" ] && [ "$rs" = "$s" ]; then
+  # El repodata SIEMPRE se sube: si cambia el contenido sin cambiar el
+  # tamano (p.ej. 0.4.1_1 -> 0.5.0_1), la heuristica nombre+tamano lo
+  # daria por bueno y el indice seguiria apuntando a un paquete borrado.
+  if [ "$n" != "$repodata" ] && [ "${RESIGN:-false}" != "true" ] && [ "$rs" = "$s" ]; then
     echo "up to date: $n"
   else
     gh release upload "$REPO_TAG" --clobber "$f"
