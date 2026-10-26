@@ -109,7 +109,11 @@ jobs:
             pkgs=$(echo "${{ inputs.packages }}" | tr ',' ' ')
           elif [ "${{ inputs.force }}" = "true" ]; then
             pkgs=$(cd z-packages/srcpkgs && for d in */; do
-              d=${d%/}; [ -L "$d" ] || [ "$d" = "xbps-triggers" ] || printf '%s ' "$d"
+              d=${d%/}; [ -L "$d" ] && continue
+              a=$(sed -n 's/^archs="\([^"]*\)"/\1/p' "$d/template" 2>/dev/null)
+              if [ -z "$a" ]; then printf '%s ' "$d"; continue; fi
+              echo "$a" | grep -q -- '~x86_64-musl' && continue
+              echo "$a" | grep -qE '(^| )(x86_64\*|x86_64-musl|\*)( |$)' && printf '%s ' "$d"
             done)
           else
             pkgs="$auto"
