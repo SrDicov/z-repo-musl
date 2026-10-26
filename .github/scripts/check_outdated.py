@@ -48,6 +48,12 @@ def parse_template(path):
     return vals
 
 
+def is_broken(path):
+    """True if the template sets broken= (uncommented) for every arch."""
+    with open(path) as fh:
+        return any(line.strip().startswith("broken=") for line in fh)
+
+
 def musl_broken(path):
     """True if the template sets broken= under a musl guard."""
     guard = re.compile(r'XBPS_TARGET_LIBC"\s*=\s*"musl"')
@@ -99,6 +105,8 @@ def collect_need(srcpkgs, arch, pool, release_lists):
         if not all(k in vals for k in ("pkgname", "version", "revision")):
             print(f"WARN: {entry}: cannot parse version, forcing build")
             need.append(entry)
+            continue
+        if is_broken(tpl):
             continue
         if arch == "x86_64-musl" and musl_broken(tpl):
             continue

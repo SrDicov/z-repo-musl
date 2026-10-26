@@ -110,6 +110,7 @@ jobs:
           elif [ "${{ inputs.force }}" = "true" ]; then
             pkgs=$(cd z-packages/srcpkgs && for d in */; do
               d=${d%/}; [ -L "$d" ] && continue
+              grep -q '^broken=' "$d/template" 2>/dev/null && continue
               a=$(sed -n 's/^archs="\([^"]*\)"/\1/p' "$d/template" 2>/dev/null)
               if [ -z "$a" ]; then printf '%s ' "$d"; continue; fi
               echo "$a" | grep -q -- '~x86_64-musl' && continue
