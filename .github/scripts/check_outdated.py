@@ -49,14 +49,24 @@ def parse_template(path):
 
 
 def is_broken(path):
-    """True if the template sets broken= (uncommented) for every arch."""
+    """True if broken= applies to every arch (not under a musl guard)."""
+    guard = re.compile(r'XBPS_TARGET_LIBC"\s*=\s*"?musl"?')
     with open(path) as fh:
-        return any(line.strip().startswith("broken=") for line in fh)
+        recent_guard = False
+        for line in fh:
+            s = line.strip()
+            if guard.search(s):
+                recent_guard = True
+            if s.startswith("broken=") and not recent_guard:
+                return True
+            if s == "fi":
+                recent_guard = False
+    return False
 
 
 def musl_broken(path):
     """True if the template sets broken= under a musl guard."""
-    guard = re.compile(r'XBPS_TARGET_LIBC"\s*=\s*"musl"')
+    guard = re.compile(r'XBPS_TARGET_LIBC"\s*=\s*"?musl"?')
     with open(path) as fh:
         recent_guard = False
         window = []
@@ -86,7 +96,7 @@ def load_pool(path):
         return {ln.strip() for ln in fh if ln.strip().endswith(".xbps")}
 
 
-def collect_need(srcpkgs, arch, pool, release_lists):
+def collect_need(srcpkgs, arch, pool, release_lists, force=False):
     """Templates in srcpkgs missing their main binpkg from pool."""
     # Infra that xbps-src hard-requires in-tree (XBPS_TRIGGERSDIR) but
     # official void repos already ship: never build/publish it ourselves.
@@ -116,7 +126,7 @@ def collect_need(srcpkgs, arch, pool, release_lists):
             f"{vals['pkgname']}-{vals['version']}_"
             f"{vals['revision']}.{arch}.xbps"
         )
-        if want not in release_lists.get(entry, pool):
+        if force or want not in release_lists.get(entry, pool):
             need.append(entry)
     return need
 
@@ -124,10 +134,13 @@ def collect_need(srcpkgs, arch, pool, release_lists):
 def main():
     args = sys.argv[1:]
     arch = "x86_64"
+    force = "--force" in args
     rest = []
     for a in args:
         if a.startswith("--arch="):
             arch = a.split("=", 1)[1]
+        elif a == "--force":
+            continue
         else:
             rest.append(a)
     positionals, extras = [], {}
@@ -141,7 +154,7 @@ def main():
     if len(positionals) == 2:
         # single-arch: srcpkgs + one asset list
         srcpkgs, listfile = positionals
-        need = collect_need(srcpkgs, arch, load_pool(listfile), release_lists)
+        need = collect_need(srcpkgs, arch, load_pool(listfile), release_lists, force)
         print(f"pkgs:{' '.join(need)}")
         return
     srcpkgs, glibc_list, musl_list = positionals[:3]

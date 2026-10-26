@@ -108,14 +108,9 @@ jobs:
           elif [ -n "${{ inputs.packages }}" ]; then
             pkgs=$(echo "${{ inputs.packages }}" | tr ',' ' ')
           elif [ "${{ inputs.force }}" = "true" ]; then
-            pkgs=$(cd z-packages/srcpkgs && for d in */; do
-              d=${d%/}; [ -L "$d" ] && continue
-              grep -q '^broken=' "$d/template" 2>/dev/null && continue
-              a=$(sed -n 's/^archs="\([^"]*\)"/\1/p' "$d/template" 2>/dev/null)
-              if [ -z "$a" ]; then printf '%s ' "$d"; continue; fi
-              echo "$a" | grep -q -- '~x86_64-musl' && continue
-              echo "$a" | grep -qE '(^| )(x86_64\*|x86_64-musl|\*)( |$)' && printf '%s ' "$d"
-            done)
+            pkgs=$(python3 .github/scripts/check_outdated.py \
+              z-packages/srcpkgs assets.txt --arch="$ARCH" --force \
+              | sed -n 's/^pkgs://p')
           else
             pkgs="$auto"
           fi
