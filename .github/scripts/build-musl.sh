@@ -4,6 +4,7 @@
 # Never exits nonzero: records failures in /void-packages/failed.txt so the
 # host can publish partial results and report afterwards.
 set -e
+set -o pipefail
 xbps-install -Syu xbps 2>&1 | tail -n 2
 xbps-install -y base-devel xtools bash git perl tar xz python3 github-cli shadow ccache util-linux 2>&1 | tail -n 2
 useradd -m builder 2>/dev/null || true
@@ -16,8 +17,22 @@ chroot --userspec=builder:builder / /bin/bash -c "id; cd /void-packages && ./xbp
 echo "=== end diagnostics ==="
 chroot --userspec=builder:builder / /bin/bash -c \
   "cd /void-packages && common/travis/set_mirror.sh 2>/dev/null || true"
-chroot --userspec=builder:builder / /bin/bash -c \
-  "cd /void-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20"
+if ! chroot --userspec=builder:builder / /bin/bash -c \
+  "set -o pipefail; cd /void-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20"; then
+  for attempt in 1 2 3; do
+    echo "bootstrap attempt $attempt failed; retrying in 15s"
+    sleep 15
+    if chroot --userspec=builder:builder / /bin/bash -c \
+      "set -o pipefail; cd /void-packages && ./xbps-src binary-bootstrap 2>&1 | tail -n 20"; then
+      break
+    fi
+    if [ "$attempt" -eq 3 ]; then
+      echo "bootstrap failed"
+      echo "bootstrap" > /void-packages/failed.txt
+      exit 0
+    fi
+  done
+fi
 failed=""
 for pkg in $PKGS; do
   if [ -L "/void-packages/srcpkgs/$pkg" ]; then
