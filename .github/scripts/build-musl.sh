@@ -45,9 +45,20 @@ for pkg in $PKGS; do
   echo "=== Building $pkg (x86_64-musl) ==="
   # pipefail inside bash -c: | tail must not mask xbps-src failures.
   # Full per-package log goes to logs/ (mounted, survives as artifact).
-  chroot --userspec=builder:builder / /bin/bash -c \
-    "set -o pipefail; cd /void-packages && ./xbps-src pkg $pkg 2>&1 | tee /void-packages/logs/$pkg.log | tail -n 60" \
-    || { echo "FAIL $pkg"; failed="$failed $pkg"; }
+  marker="/void-packages/.build-start-$pkg"
+  touch "$marker"
+  if ! chroot --userspec=builder:builder / /bin/bash -c \
+    "set -o pipefail; cd /void-packages && ./xbps-src pkg $pkg 2>&1 | tee /void-packages/logs/$pkg.log | tail -n 60"; then
+    # Known xbps-src teardown bug: the seeded masterdir makes the autodeps
+    # removal transaction fail after the package was already created.
+    pkgfile=$(ls -t /void-packages/hostdir/binpkgs/$pkg-*.xbps 2>/dev/null | head -n 1)
+    if [ -n "$pkgfile" ] && [ "$pkgfile" -nt "$marker" ] \
+         && grep -q 'ERROR: Transaction failed' "/void-packages/logs/$pkg.log"; then
+      echo "WARN $pkg: only the autodeps teardown failed; package was created"
+    else
+      echo "FAIL $pkg"; failed="$failed $pkg"
+    fi
+  fi
 done
 # native builds land in hostdir/binpkgs/ top level: move to x86_64-musl/
 if ls /void-packages/hostdir/binpkgs/*.xbps 1>/dev/null 2>&1; then
