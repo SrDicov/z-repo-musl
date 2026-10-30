@@ -4,7 +4,8 @@
 # Never exits nonzero: records failures in /void-packages/failed.txt so the
 # host can publish partial results and report afterwards.
 set -e
-set -o pipefail
+# The entrypoint runs this file with /bin/sh (dash) before bash is installed,
+# so no `set -o pipefail` here; later bash -c calls enable it explicitly.
 xbps-install -Syu xbps 2>&1 | tail -n 2
 xbps-install -y base-devel xtools bash git perl tar xz python3 github-cli shadow ccache util-linux 2>&1 | tail -n 2
 useradd -m builder 2>/dev/null || true
