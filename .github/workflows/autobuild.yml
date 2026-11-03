@@ -129,6 +129,10 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+
       - name: Clone z-packages (treeless)
         run: |
           rm -rf z-packages

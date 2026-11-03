@@ -48,16 +48,11 @@ EOF
 # from a rotated key would keep packages signed by the retired key
 rm -f ./*.sig2
 xbps-rindex --sign-pkg --privkey /tmp/rsa.pem ./*.xbps
-# -af, never plain -a: without -f xbps-rindex skips already registered
-# entries ("index: skipping `pkg' (x86_64), already registered"), so a
-# package rebuilt with the same version+revision kept the OLD
-# filename-sha256 in the seeded repodata while the NEW asset got
-# uploaded: the index stopped describing the published asset.
-xbps-rindex -af ./*.xbps
-# the seeded repodata still holds entries for versions pruned above
-# (asset deleted); drop entries whose local file is missing or
-# hash-mismatched so the index describes exactly the .xbps on disk
-xbps-rindex -cC .
+# Always rebuild repodata cleanly from the exact packages present on disk.
+# Reusing an existing repodata incrementally causes stale entries to linger
+# in stage.plist/index.plist and causes sha256 mismatches with release assets.
+rm -f ./*-repodata*
+xbps-rindex -a ./*.xbps
 xbps-rindex --sign --signedby "$SIGNED_BY" --privkey /tmp/rsa.pem .
 
 # publish the public key both raw (PEM) and in the exact plist format
