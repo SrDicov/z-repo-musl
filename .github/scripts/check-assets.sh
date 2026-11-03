@@ -33,8 +33,18 @@ if ! gh release download "$TAG" --repo "$REPO" -p zlinux-repo.pub \
   cp keys/zlinux-repo.pub "$pub"
 fi
 
+read_index_plist() {
+  if command -v bsdtar >/dev/null 2>&1; then
+    bsdtar -xOf "$1" index.plist
+  elif command -v 7z >/dev/null 2>&1; then
+    7z e -so "$1" 2>/dev/null | tar -xOf - index.plist
+  else
+    tar -xOf "$1" index.plist
+  fi
+}
+
 # pkgver + architecture of everything the published index advertises
-bsdtar -xOf "$tmp/$repodata" index.plist | awk -v FS='[<>]' '
+read_index_plist "$tmp/$repodata" | awk -v FS='[<>]' '
   /^\t<dict>$/ { intopkg = 1; next }
   intopkg && /^\t<\/dict>$/ {
     if (pkgver != "" && arch != "") print pkgver, arch
