@@ -34,6 +34,13 @@ if ! chroot --userspec=builder:builder / /bin/bash -c \
     fi
   done
 fi
+# xbps-src resolves runtime deps from the local repo root
+# (hostdir/binpkgs), not from the x86_64-musl subdir. Index the seed
+# there so a published runtime dep is not rebuilt from source.
+if ls /void-packages/hostdir/binpkgs/x86_64-musl/*.xbps >/dev/null 2>&1; then
+  cp -f /void-packages/hostdir/binpkgs/x86_64-musl/*.xbps /void-packages/hostdir/binpkgs/
+  ( cd /void-packages/hostdir/binpkgs && xbps-rindex -a ./*.xbps >/dev/null )
+fi
 failed=""
 for pkg in $PKGS; do
   if [ -L "/void-packages/srcpkgs/$pkg" ]; then
