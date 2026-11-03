@@ -38,8 +38,9 @@ fi
 # (hostdir/binpkgs), not from the x86_64-musl subdir. Index the seed
 # there so a published runtime dep is not rebuilt from source.
 if ls /void-packages/hostdir/binpkgs/x86_64-musl/*.xbps >/dev/null 2>&1; then
-  cp -f /void-packages/hostdir/binpkgs/x86_64-musl/*.xbps /void-packages/hostdir/binpkgs/
-  ( cd /void-packages/hostdir/binpkgs && xbps-rindex -a ./*.xbps >/dev/null )
+  ln -f /void-packages/hostdir/binpkgs/x86_64-musl/*.xbps /void-packages/hostdir/binpkgs/
+  chroot --userspec=builder:builder / /bin/bash -c \
+    "cd /void-packages/hostdir/binpkgs && xbps-rindex -a ./*.xbps >/dev/null"
 fi
 failed=""
 for pkg in $PKGS; do
