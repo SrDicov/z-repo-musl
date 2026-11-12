@@ -85,7 +85,7 @@ jobs:
               -v "$PWD/.github/scripts/autopkg:/autopkg:ro" \
               -w /void-packages \
               "$IMAGE" \
-              bash -c '
+              sh -c '
                 set -e
                 mkdir -p etc
                 echo "XBPS_ALLOW_RESTRICTED=yes" >> etc/conf
