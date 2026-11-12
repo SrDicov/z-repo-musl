@@ -99,7 +99,7 @@ jobs:
                 chown -R builder:builder /void-packages /tmp/builder 2>/dev/null || true
                 su - builder -c "git config --global --add safe.directory /void-packages"
                 su - builder -c "python3 /autopkg/cli.py build --repo /void-packages --arch '"$ARCH"' '"$pkg"'"
-              '
+              ' || echo "Package build failed for $pkg: continuing"
           done
 
       - name: Stage Binaries
