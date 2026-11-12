@@ -20,6 +20,7 @@ on:
 
 env:
   ARCH: x86_64-musl
+  IMAGE: ghcr.io/void-linux/void-musl-full:latest
   REPO_TAG: stable
   GH_REPO: ${{ github.repository }}
 
@@ -34,31 +35,18 @@ jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    container:
-      image: ghcr.io/void-linux/void-musl-full:latest
-      options: --privileged
     steps:
-      - name: Checkout z-repo-musl
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
-          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
-          xbps-install -Syu -y xbps || true
-          xbps-install -y sudo bash curl git python3 github-cli || true
-          git config --global --add safe.directory '*'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Clone z-packages
         run: |
           git clone --depth 1 https://github.com/SrDicov/z-packages.git z-packages
-
-      - name: Setup xbps-src
-        run: |
-          cd z-packages
-          mkdir -p etc
-          echo "XBPS_ALLOW_RESTRICTED=yes" >> etc/conf
-          echo "XBPS_MAKEJOBS=$(nproc)" >> etc/conf
 
       - name: Determine packages to build
         id: planner
@@ -69,7 +57,7 @@ jobs:
           if [ -n "${{ github.event.inputs.packages }}" ]; then
             PKGS="${{ github.event.inputs.packages }}"
           else
-            PKGS=$(python3 .github/scripts/autopkg/cli.py plan --repo z-packages --limit 0 --json | jq -r '.[]' || true)
+            PKGS=$(python3 .github/scripts/autopkg/cli.py plan --repo z-packages --arch "$ARCH" --limit 0 | tr '\n' ' ')
           fi
           echo "pkgs=$PKGS" >> "$GITHUB_OUTPUT"
           echo "Packages to process: $PKGS"
@@ -84,16 +72,28 @@ jobs:
               --repo z-packages \
               --from-github "SrDicov/z-repo-musl" \
               --arch "$ARCH" \
-              $pkg || true
+              "$pkg" || true
           done
 
-      - name: Build Packages with Quarantine
+      - name: Build Packages in Isolated Container
         if: steps.planner.outputs.pkgs != ''
         run: |
-          python3 .github/scripts/autopkg/cli.py build \
-            --repo z-packages \
-            --arch "$ARCH" \
-            ${{ steps.planner.outputs.pkgs }}
+          for pkg in ${{ steps.planner.outputs.pkgs }}; do
+            docker run --rm --privileged \
+              -v "$PWD/z-packages:/void-packages" \
+              -v "$PWD/.github/scripts/autopkg:/autopkg:ro" \
+              -w /void-packages \
+              "$IMAGE" \
+              sh -c "
+                mkdir -p etc
+                echo 'XBPS_ALLOW_RESTRICTED=yes' >> etc/conf
+                echo 'XBPS_MAKEJOBS=\$(nproc)' >> etc/conf
+                mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
+                sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
+                xbps-install -Syu -y python3 >/dev/null 2>&1 || true
+                python3 /autopkg/cli.py build --repo /void-packages --arch $ARCH \$pkg
+              "
+          done
 
       - name: Stage Binaries
         run: |
@@ -101,17 +101,43 @@ jobs:
           find z-packages/hostdir/binpkgs -name "*.xbps" -exec cp {} dist/ \;
           cp keys/*.plist dist/ 2>/dev/null || true
 
-      - name: Sign, Index and Publish (Strict Verification)
+      - name: Sign and Index Repository
+        if: env.XBPS_PRIVATE_KEY != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
           SIGNED_BY: "Z Linux Core <SrDicov@gmail.com>"
         run: |
-          python3 .github/scripts/autopkg/cli.py publish \
-            --binpkgs-dir dist \
-            --arch "$ARCH" \
-            --backend github \
-            --dest "${{ github.repository }}" \
-            --tag "$REPO_TAG" \
-            --signed-by "$SIGNED_BY" \
-            --prune
+          if [ -n "$(find dist -name '*.xbps' 2>/dev/null)" ]; then
+            docker run --rm --privileged \
+              -v "$PWD/dist:/dist" \
+              -v "$PWD/.github/scripts/autopkg:/autopkg:ro" \
+              -e XBPS_PRIVATE_KEY="$XBPS_PRIVATE_KEY" \
+              -e SIGNED_BY="$SIGNED_BY" \
+              "$IMAGE" \
+              sh -c "
+                mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
+                sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
+                xbps-install -Syu -y python3 openssl >/dev/null 2>&1 || true
+                python3 /autopkg/cli.py publish \
+                  --binpkgs-dir /dist \
+                  --arch $ARCH \
+                  --backend local \
+                  --dest /dist \
+                  --signed-by \"\$SIGNED_BY\" \
+                  --prune
+              "
+          fi
+
+      - name: Publish to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "$(find dist -name '*.xbps' 2>/dev/null)" ]; then
+            python3 .github/scripts/autopkg/cli.py publish \
+              --binpkgs-dir dist \
+              --arch "$ARCH" \
+              --backend github \
+              --dest "${{ github.repository }}" \
+              --tag "$REPO_TAG" \
+              --upload-only
+          fi
