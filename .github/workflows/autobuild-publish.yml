@@ -1,0 +1,117 @@
+name: "Z Repo Autobuild & Publish (musl)"
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - ".github/**"
+      - "keys/**"
+      - "README.md"
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Space-separated list of packages to build and publish (empty for auto-detect)"
+        required: false
+        default: ""
+  repository_dispatch:
+    types: [z-packages-update]
+  schedule:
+    - cron: "0 3 * * *"
+
+env:
+  ARCH: x86_64-musl
+  REPO_TAG: stable
+  GH_REPO: ${{ github.repository }}
+
+concurrency:
+  group: z-repo-musl-autobuild
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    container:
+      image: ghcr.io/void-linux/void-musl-full:latest
+      options: --privileged
+    steps:
+      - name: Checkout z-repo-musl
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/ 2>/dev/null || true
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf 2>/dev/null || true
+          xbps-install -Syu -y xbps || true
+          xbps-install -y sudo bash curl git python3 github-cli || true
+          git config --global --add safe.directory '*'
+
+      - name: Clone z-packages
+        run: |
+          git clone --depth 1 https://github.com/SrDicov/z-packages.git z-packages
+
+      - name: Setup xbps-src
+        run: |
+          cd z-packages
+          mkdir -p etc
+          echo "XBPS_ALLOW_RESTRICTED=yes" >> etc/conf
+          echo "XBPS_MAKEJOBS=$(nproc)" >> etc/conf
+
+      - name: Determine packages to build
+        id: planner
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if [ -n "${{ github.event.inputs.packages }}" ]; then
+            PKGS="${{ github.event.inputs.packages }}"
+          else
+            PKGS=$(python3 .github/scripts/autopkg/cli.py plan --repo z-packages --limit 0 --json | jq -r '.[]' || true)
+          fi
+          echo "pkgs=$PKGS" >> "$GITHUB_OUTPUT"
+          echo "Packages to process: $PKGS"
+
+      - name: Seed Dependencies Surgically
+        if: steps.planner.outputs.pkgs != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for pkg in ${{ steps.planner.outputs.pkgs }}; do
+            python3 .github/scripts/autopkg/cli.py seed \
+              --repo z-packages \
+              --from-github "SrDicov/z-repo-musl" \
+              --arch "$ARCH" \
+              $pkg || true
+          done
+
+      - name: Build Packages with Quarantine
+        if: steps.planner.outputs.pkgs != ''
+        run: |
+          python3 .github/scripts/autopkg/cli.py build \
+            --repo z-packages \
+            --arch "$ARCH" \
+            ${{ steps.planner.outputs.pkgs }}
+
+      - name: Stage Binaries
+        run: |
+          mkdir -p dist
+          find z-packages/hostdir/binpkgs -name "*.xbps" -exec cp {} dist/ \;
+          cp keys/*.plist dist/ 2>/dev/null || true
+
+      - name: Sign, Index and Publish (Strict Verification)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
+          SIGNED_BY: "Z Linux Core <SrDicov@gmail.com>"
+        run: |
+          python3 .github/scripts/autopkg/cli.py publish \
+            --binpkgs-dir dist \
+            --arch "$ARCH" \
+            --backend github \
+            --dest "${{ github.repository }}" \
+            --tag "$REPO_TAG" \
+            --signed-by "$SIGNED_BY" \
+            --prune
