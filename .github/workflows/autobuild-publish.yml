@@ -105,7 +105,7 @@ jobs:
       - name: Stage Binaries
         run: |
           mkdir -p dist
-          find z-packages/hostdir/binpkgs -name "*.xbps" -exec cp {} dist/ \;
+          find z-packages/hostdir/binpkgs -name "*.xbps" -exec cp {} dist/ \; 2>/dev/null || true
           cp keys/*.plist dist/ 2>/dev/null || true
 
       - name: Sign and Index Repository
