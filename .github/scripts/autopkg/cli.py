@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from builder.bootstrap import MasterdirBootstrapper
 from builder.runner import BuildRunner
 from builder.selective_seed import SelectiveSeeder
+from builder.workspace import prepare_build_tree
 from core.adapter import RepoAdapter
 from core.dag import DependencyPlanner
 from core.quarantine import QuarantineManager
@@ -157,6 +158,7 @@ def cmd_update(args: argparse.Namespace) -> int:
 
     tmpl = TemplateEditor.parse_file(tmpl_path)
     new_version = args.version
+    effective_revision = args.revision
     extra_vars: dict = {}
     tag_val = None
 
@@ -165,9 +167,19 @@ def cmd_update(args: argparse.Namespace) -> int:
         engine = DetectionEngine(adapter, rules_path=args.rules)
         cand = engine.check_package(args.pkgname)
         if cand and cand.needs_update:
-            new_version = cand.latest_version
-            if cand.extra and cand.extra.get("tag"):
-                tag_val = cand.extra["tag"]
+            if cand.extra and cand.extra.get("commit"):
+                # Commit-pinned template: move the pin and bump revision, keep version.
+                commit_var = cand.extra.get("commit_var")
+                if not commit_var:
+                    logger.error("Commit update for %s but no pin variable found", args.pkgname)
+                    return 1
+                extra_vars[commit_var] = cand.extra["commit"]
+                effective_revision = tmpl.revision + 1
+                new_version = tmpl.version
+            else:
+                new_version = cand.latest_version
+                if cand.extra and cand.extra.get("tag"):
+                    tag_val = cand.extra["tag"]
         else:
             logger.info("Package %s is already up-to-date (%s)", args.pkgname, tmpl.version)
             return 0
@@ -189,13 +201,17 @@ def cmd_update(args: argparse.Namespace) -> int:
             else:
                 resolved_url = clean_url.replace(tmpl.version, new_version)
             resolved_url = resolved_url.replace("${pkgname}", tmpl.pkgname).replace("$pkgname", tmpl.pkgname)
+            for k, v in extra_vars.items():
+                resolved_url = resolved_url.replace("${" + k + "}", v).replace("$" + k, v)
             if tag_val:
                 resolved_url = resolved_url.replace("${_tag}", tag_val).replace("$_tag", tag_val)
 
             # If unresolved bash variables remain, fallback to expanded distfiles
             if "${" in resolved_url and i < len(tmpl.distfiles):
                 fallback_clean = tmpl.distfiles[i].split(">")[0].strip()
-                resolved_url = fallback_clean.replace(tmpl.version, new_version)
+                resolved_url = fallback_clean.replace(tmpl.version, new_version).replace("${pkgname}", tmpl.pkgname)
+                for k, v in extra_vars.items():
+                    resolved_url = resolved_url.replace("${" + k + "}", v).replace("$" + k, v)
             try:
                 computed.append(compute_distfile_sha256(resolved_url))
             except Exception as e:
@@ -213,7 +229,7 @@ def cmd_update(args: argparse.Namespace) -> int:
                 TemplateEditor.update_file(
                     tmpl_path,
                     new_version=new_version,
-                    new_revision=args.revision,
+                    new_revision=effective_revision,
                     additional_vars=extra_vars or None,
                 )
                 import subprocess
@@ -243,11 +259,11 @@ def cmd_update(args: argparse.Namespace) -> int:
     TemplateEditor.update_file(
         tmpl_path,
         new_version=new_version,
-        new_revision=args.revision,
+        new_revision=effective_revision,
         new_checksum=new_checksums if new_checksums else None,
         additional_vars=extra_vars or None,
     )
-    logger.info("Successfully updated %s to version %s (revision %d) with %d checksum(s)", args.pkgname, new_version, args.revision, len(new_checksums))
+    logger.info("Successfully updated %s to version %s (revision %d) with %d checksum(s)", args.pkgname, new_version, effective_revision, len(new_checksums))
 
     return 0
 
@@ -266,6 +282,22 @@ def cmd_seed(args: argparse.Namespace) -> int:
         token=args.token,
     )
     logger.info("Seeded %d dependency packages into %s", len(downloaded), seeder.binpkgs_arch_dir)
+    return 0
+
+
+def cmd_prepare_tree(args: argparse.Namespace) -> int:
+    try:
+        tree = prepare_build_tree(
+            repo_root=args.repo,
+            dest=args.dest,
+            clone_url=args.clone_url,
+            ref=args.ref,
+            force=args.force,
+        )
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        return 1
+    print(tree)
     return 0
 
 
@@ -426,6 +458,18 @@ def main() -> int:
     p_seed.add_argument("--token", default=None, help="GitHub token")
     p_seed.add_argument("packages", nargs="+", help="Target packages to resolve dependencies for")
     p_seed.set_defaults(func=cmd_seed)
+
+    # prepare-tree
+    p_tree = subparsers.add_parser(
+        "prepare-tree",
+        help="Compose a buildable void-packages tree for template-only repositories",
+    )
+    p_tree.add_argument("--repo", default=".", help="Repository root path")
+    p_tree.add_argument("--dest", required=True, help="Destination for the void-packages checkout")
+    p_tree.add_argument("--clone-url", default="https://github.com/void-linux/void-packages.git", help="void-packages clone URL")
+    p_tree.add_argument("--ref", default=None, help="Optional branch/tag to clone")
+    p_tree.add_argument("--force", action="store_true", help="Recreate the destination tree")
+    p_tree.set_defaults(func=cmd_prepare_tree)
 
     # build
     p_build = subparsers.add_parser("build", help="Compile packages with quarantine tracking")

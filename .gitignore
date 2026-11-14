@@ -8,3 +8,5 @@
 z-packages/
 hostdir/
 *.tar.gz
+__pycache__/
+*.pyc
