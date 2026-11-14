@@ -13,6 +13,11 @@ on:
         description: "Space-separated list of packages to build and publish (empty for auto-detect)"
         required: false
         default: ""
+      rebuild_repodata:
+        description: "Download all .xbps from stable, rebuild and sign complete repodata"
+        required: false
+        type: boolean
+        default: false
   repository_dispatch:
     types: [z-packages-update]
   schedule:
@@ -54,7 +59,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          if [ -n "${{ github.event.inputs.packages }}" ]; then
+          if [ "${{ github.event.inputs.rebuild_repodata }}" = "true" ]; then
+            echo "Full repodata rebuild requested; skipping package builds."
+            PKGS=""
+          elif [ -n "${{ github.event.inputs.packages }}" ]; then
             PKGS="${{ github.event.inputs.packages }}"
           else
             PKGS=$(python3 .github/scripts/autopkg/cli.py plan --repo z-packages --arch "$ARCH" --limit 0 | tr '\n' ' ')
@@ -103,9 +111,19 @@ jobs:
           done
 
       - name: Stage Binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p dist
-          find z-packages/hostdir/binpkgs -name "*.xbps" -exec cp {} dist/ \; 2>/dev/null || true
+          if [ "${{ github.event.inputs.rebuild_repodata }}" = "true" ]; then
+            echo "Rebuilding full repository: downloading all $ARCH.xbps assets from release $REPO_TAG..."
+            gh release download "$REPO_TAG" --pattern "*.$ARCH.xbps*" --repo "$GH_REPO" --dir dist
+            rm -f dist/*-repodata*
+          else
+            echo "Incremental staging: downloading existing repodata for incremental index update..."
+            gh release download "$REPO_TAG" --pattern "$ARCH-repodata*" --repo "$GH_REPO" --dir dist 2>/dev/null || true
+            find z-packages/hostdir/binpkgs -name "*.xbps" -exec cp {} dist/ \; 2>/dev/null || true
+          fi
           cp keys/*.plist dist/ 2>/dev/null || true
 
       - name: Sign and Index Repository
@@ -113,8 +131,11 @@ jobs:
         env:
           XBPS_PRIVATE_KEY: ${{ secrets.XBPS_PRIVATE_KEY }}
           SIGNED_BY: "Z Linux Core <SrDicov@gmail.com>"
+          REBUILD_REPODATA: ${{ github.event.inputs.rebuild_repodata }}
         run: |
           if [ -n "$(find dist -name '*.xbps' 2>/dev/null)" ]; then
+            clean_flag=""
+            [ "$REBUILD_REPODATA" = "true" ] && clean_flag="--clean-repodata"
             docker run --rm --privileged \
               -v "$PWD/dist:/dist" \
               -v "$PWD/.github/scripts/autopkg:/autopkg:ro" \
@@ -131,7 +152,8 @@ jobs:
                   --backend local \
                   --dest /dist \
                   --signed-by \"\$SIGNED_BY\" \
-                  --prune
+                  --prune \
+                  $clean_flag
               "
           fi
 
