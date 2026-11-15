@@ -122,7 +122,13 @@ jobs:
           else
             echo "Incremental staging: downloading existing repodata for incremental index update..."
             gh release download "$REPO_TAG" --pattern "$ARCH-repodata*" --repo "$GH_REPO" --dir dist 2>/dev/null || true
-            find z-packages/hostdir/binpkgs -name "*.xbps" -exec cp {} dist/ \; 2>/dev/null || true
+            if [ -n "${{ steps.planner.outputs.pkgs }}" ]; then
+              for pkg in ${{ steps.planner.outputs.pkgs }}; do
+                find z-packages/hostdir/binpkgs -name "${pkg}-[0-9]*.xbps" -exec cp {} dist/ \; 2>/dev/null || true
+              done
+            else
+              find z-packages/hostdir/binpkgs -name "*.xbps" -exec cp {} dist/ \; 2>/dev/null || true
+            fi
           fi
           cp keys/*.plist dist/ 2>/dev/null || true
 
