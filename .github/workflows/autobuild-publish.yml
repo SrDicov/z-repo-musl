@@ -65,7 +65,7 @@ jobs:
           elif [ -n "${{ github.event.inputs.packages }}" ]; then
             PKGS="${{ github.event.inputs.packages }}"
           else
-            PKGS=$(python3 .github/scripts/autopkg/cli.py plan --repo z-packages --arch "$ARCH" --limit 0 | tr '\n' ' ')
+            PKGS=$(python3 .github/scripts/autopkg/cli.py plan --repo z-packages --check-binrepo "${{ github.repository }}" --arch "$ARCH" --limit 0 | tr '\n' ' ')
           fi
           echo "pkgs=$PKGS" >> "$GITHUB_OUTPUT"
           echo "Packages to process: $PKGS"
