@@ -168,6 +168,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "$(find dist -name '*.xbps' 2>/dev/null)" ]; then
+            sudo rm -f dist/*.lock dist/*.tmp 2>/dev/null || true
+            sudo chmod -R a+rX dist 2>/dev/null || true
+            sudo chown -R $USER:$USER dist 2>/dev/null || true
             python3 .github/scripts/autopkg/cli.py publish \
               --binpkgs-dir dist \
               --arch "$ARCH" \
